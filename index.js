@@ -151,6 +151,434 @@ app.get('/api/box-type', async (req, res) => {
   }
 });
 
+// ============================================
+// CART ENDPOINTS
+// ============================================
+
+// Get cart items for a user
+app.get('/api/cart', async (req, res) => {
+  try {
+    const { user_id } = req.query;
+    
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id query parameter is required'
+      });
+    }
+
+    const cartItems = await sql`
+      SELECT 
+        ci.*,
+        p.name as product_name,
+        p.price,
+        p.currency,
+        p.images,
+        p.product_type,
+        p.status as product_status
+      FROM cart_items ci
+      JOIN products p ON ci.product_id = p.id
+      WHERE ci.user_id = ${user_id}
+      ORDER BY ci.created_at DESC
+    `;
+    
+    res.json({
+      success: true,
+      data: cartItems,
+      count: cartItems.length
+    });
+  } catch (error) {
+    console.error('Error fetching cart items:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Add item to cart
+app.post('/api/cart', async (req, res) => {
+  try {
+    const { user_id, product_id, quantity, box_type_preference } = req.body;
+    
+    if (!user_id || !product_id || !quantity) {
+      return res.status(400).json({
+        success: false,
+        error: 'user_id, product_id, and quantity are required'
+      });
+    }
+
+    if (quantity <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'quantity must be greater than 0'
+      });
+    }
+
+    // Check if product exists
+    const product = await sql`
+      SELECT id, name, status FROM products WHERE id = ${product_id}
+    `;
+    
+    if (product.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Product not found'
+      });
+    }
+
+    // Insert or update cart item
+    const result = await sql`
+      INSERT INTO cart_items (user_id, product_id, quantity, box_type_preference)
+      VALUES (${user_id}, ${product_id}, ${quantity}, ${box_type_preference || null})
+      ON CONFLICT (user_id, product_id) 
+      DO UPDATE SET 
+        quantity = cart_items.quantity + ${quantity},
+        box_type_preference = COALESCE(EXCLUDED.box_type_preference, cart_items.box_type_preference),
+        updated_at = NOW()
+      RETURNING *
+    `;
+    
+    res.status(201).json({
+      success: true,
+      data: result[0]
+    });
+  } catch (error) {
+    console.error('Error adding to cart:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// ============================================
+// ORDER ENDPOINTS
+// ============================================
+
+// Create a new order
+app.post('/api/orders', async (req, res) => {
+  try {
+    const {
+      user_id,
+      order_number,
+      subtotal,
+      isf,
+      lsf,
+      shipping_fee,
+      solo_shipping_fee,
+      shared_shipping_fee,
+      total,
+      currency = 'PHP',
+      status = 'pending',
+      payment_status = 'pending',
+      payment_type = 'full',
+      payment_method,
+      downpayment_amount,
+      balance,
+      qr_code,
+      box_type_preference,
+      shipping_address,
+      order_items
+    } = req.body;
+
+    // Validation
+    if (!user_id || !order_number || !subtotal || !total || !box_type_preference || !shipping_address || !order_items) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: user_id, order_number, subtotal, total, box_type_preference, shipping_address, order_items'
+      });
+    }
+
+    if (!Array.isArray(order_items) || order_items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'order_items must be a non-empty array'
+      });
+    }
+
+    // Calculate shipping fee if not provided
+    const calculatedShippingFee = shipping_fee || (isf || 0) + (lsf || 0);
+
+    // Start transaction - create order
+    const order = await sql`
+      INSERT INTO orders (
+        user_id, order_number, subtotal, isf, lsf, shipping_fee,
+        solo_shipping_fee, shared_shipping_fee, total, currency,
+        status, payment_status, payment_type, payment_method,
+        downpayment_amount, balance, qr_code, box_type_preference, shipping_address
+      )
+      VALUES (
+        ${user_id}, ${order_number}, ${subtotal}, ${isf || 0}, ${lsf || 0}, ${calculatedShippingFee},
+        ${solo_shipping_fee || null}, ${shared_shipping_fee || null}, ${total}, ${currency},
+        ${status}, ${payment_status}, ${payment_type}, ${payment_method ? JSON.stringify(payment_method) : null},
+        ${downpayment_amount || null}, ${balance || null}, ${qr_code || null}, ${box_type_preference}, ${JSON.stringify(shipping_address)}
+      )
+      RETURNING *
+    `;
+
+    const orderId = order[0].id;
+
+    // Insert order items
+    const itemsToInsert = order_items.map(item => ({
+      order_id: orderId,
+      product_id: item.product_id,
+      product_name: item.product_name,
+      product_type: item.product_type || 'onhand',
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      total: item.total,
+      image_url: item.image_url || null,
+      preorder_release_date: item.preorder_release_date || null
+    }));
+
+    for (const item of itemsToInsert) {
+      await sql`
+        INSERT INTO order_items (
+          order_id, product_id, product_name, product_type,
+          quantity, unit_price, total, image_url, preorder_release_date
+        )
+        VALUES (
+          ${item.order_id}, ${item.product_id}, ${item.product_name}, ${item.product_type},
+          ${item.quantity}, ${item.unit_price}, ${item.total}, ${item.image_url}, ${item.preorder_release_date}
+        )
+      `;
+    }
+
+    // Get complete order with items
+    const completeOrder = await sql`
+      SELECT o.*, 
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', oi.id,
+              'product_id', oi.product_id,
+              'product_name', oi.product_name,
+              'product_type', oi.product_type,
+              'quantity', oi.quantity,
+              'unit_price', oi.unit_price,
+              'total', oi.total,
+              'image_url', oi.image_url,
+              'preorder_release_date', oi.preorder_release_date
+            )
+          ) FILTER (WHERE oi.id IS NOT NULL),
+          '[]'
+        ) as items
+      FROM orders o
+      LEFT JOIN order_items oi ON o.id = oi.order_id
+      WHERE o.id = ${orderId}
+      GROUP BY o.id
+    `;
+
+    res.status(201).json({
+      success: true,
+      data: completeOrder[0]
+    });
+  } catch (error) {
+    console.error('Error creating order:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Get orders (with optional user_id, status, payment_status filters)
+app.get('/api/orders', async (req, res) => {
+  try {
+    const { user_id, status, payment_status } = req.query;
+    let orders;
+    if (user_id && status && payment_status) {
+      orders = await sql`
+        SELECT o.*,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', oi.id,
+                'product_id', oi.product_id,
+                'product_name', oi.product_name,
+                'product_type', oi.product_type,
+                'quantity', oi.quantity,
+                'unit_price', oi.unit_price,
+                'total', oi.total,
+                'image_url', oi.image_url,
+                'preorder_release_date', oi.preorder_release_date
+              )
+            ) FILTER (WHERE oi.id IS NOT NULL),
+            '[]'
+          ) as items
+        FROM orders o
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        WHERE o.user_id = ${user_id} AND o.status = ${status} AND o.payment_status = ${payment_status}
+        GROUP BY o.id
+        ORDER BY o.created_at DESC
+      `;
+    } else if (user_id && status) {
+      orders = await sql`
+        SELECT o.*,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', oi.id,
+                'product_id', oi.product_id,
+                'product_name', oi.product_name,
+                'product_type', oi.product_type,
+                'quantity', oi.quantity,
+                'unit_price', oi.unit_price,
+                'total', oi.total,
+                'image_url', oi.image_url,
+                'preorder_release_date', oi.preorder_release_date
+              )
+            ) FILTER (WHERE oi.id IS NOT NULL),
+            '[]'
+          ) as items
+        FROM orders o
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        WHERE o.user_id = ${user_id} AND o.status = ${status}
+        GROUP BY o.id
+        ORDER BY o.created_at DESC
+      `;
+    } else if (user_id && payment_status) {
+      orders = await sql`
+        SELECT o.*,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', oi.id,
+                'product_id', oi.product_id,
+                'product_name', oi.product_name,
+                'product_type', oi.product_type,
+                'quantity', oi.quantity,
+                'unit_price', oi.unit_price,
+                'total', oi.total,
+                'image_url', oi.image_url,
+                'preorder_release_date', oi.preorder_release_date
+              )
+            ) FILTER (WHERE oi.id IS NOT NULL),
+            '[]'
+          ) as items
+        FROM orders o
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        WHERE o.user_id = ${user_id} AND o.payment_status = ${payment_status}
+        GROUP BY o.id
+        ORDER BY o.created_at DESC
+      `;
+    } else if (user_id) {
+      orders = await sql`
+        SELECT o.*,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', oi.id,
+                'product_id', oi.product_id,
+                'product_name', oi.product_name,
+                'product_type', oi.product_type,
+                'quantity', oi.quantity,
+                'unit_price', oi.unit_price,
+                'total', oi.total,
+                'image_url', oi.image_url,
+                'preorder_release_date', oi.preorder_release_date
+              )
+            ) FILTER (WHERE oi.id IS NOT NULL),
+            '[]'
+          ) as items
+        FROM orders o
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        WHERE o.user_id = ${user_id}
+        GROUP BY o.id
+        ORDER BY o.created_at DESC
+      `;
+    } else {
+      // No filters - get all orders (limited)
+      orders = await sql`
+        SELECT o.*,
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', oi.id,
+                'product_id', oi.product_id,
+                'product_name', oi.product_name,
+                'product_type', oi.product_type,
+                'quantity', oi.quantity,
+                'unit_price', oi.unit_price,
+                'total', oi.total,
+                'image_url', oi.image_url,
+                'preorder_release_date', oi.preorder_release_date
+              )
+            ) FILTER (WHERE oi.id IS NOT NULL),
+            '[]'
+          ) as items
+        FROM orders o
+        LEFT JOIN order_items oi ON o.id = oi.order_id
+        GROUP BY o.id
+        ORDER BY o.created_at DESC
+        LIMIT 100
+      `;
+    }
+    
+    res.json({
+      success: true,
+      data: orders,
+      count: orders.length
+    });
+  } catch (error) {
+    console.error('Error fetching orders:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Get a specific order by ID
+app.get('/api/orders/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const order = await sql`
+      SELECT o.*,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', oi.id,
+              'product_id', oi.product_id,
+              'product_name', oi.product_name,
+              'product_type', oi.product_type,
+              'quantity', oi.quantity,
+              'unit_price', oi.unit_price,
+              'total', oi.total,
+              'image_url', oi.image_url,
+              'preorder_release_date', oi.preorder_release_date
+            )
+          ) FILTER (WHERE oi.id IS NOT NULL),
+          '[]'
+        ) as items
+      FROM orders o
+      LEFT JOIN order_items oi ON o.id = oi.order_id
+      WHERE o.id = ${id}
+      GROUP BY o.id
+    `;
+
+    if (order.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: order[0]
+    });
+  } catch (error) {
+    console.error('Error fetching order:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Example POST route
 app.post('/api/users', async (req, res) => {
   try {
@@ -198,7 +626,12 @@ app.get('/', (req, res) => {
       getUsers: 'GET /api/users',
       createUser: 'POST /api/users',
       getBankType: 'GET /api/bank-type',
-      getBoxType: 'GET /api/box-type'
+      getBoxType: 'GET /api/box-type',
+      getCart: 'GET /api/cart?user_id=UUID',
+      addToCart: 'POST /api/cart',
+      createOrder: 'POST /api/orders',
+      getOrders: 'GET /api/orders?user_id=UUID&status=string&payment_status=string',
+      getOrderById: 'GET /api/orders/:id'
     }
   });
 });
