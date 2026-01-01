@@ -1,5 +1,177 @@
 # API Endpoints Documentation
 
+## Authentication Endpoints
+
+### POST /api/auth/register
+Register a new user account.
+
+**Request Body:**
+```json
+{
+  "email": "user@example.com",
+  "password": "password123",
+  "name": "John Doe",
+  "phone": "+63 912 345 6789",
+  "address": {
+    "street": "123 Main St",
+    "city": "Manila",
+    "province": "Metro Manila",
+    "zipCode": "1000",
+    "country": "Philippines"
+  },
+  "role": "customer"
+}
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "message": "User registered successfully",
+  "data": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "name": "John Doe",
+    "phone": "+63 912 345 6789",
+    "address": {...},
+    "role": "customer",
+    "approval_status": "pending",
+    "created_at": "2024-01-01T00:00:00Z"
+  }
+}
+```
+
+**Validation:**
+- Password must be at least 6 characters
+- Email must be unique
+- Default role is 'customer'
+- Default approval_status is 'pending' (admin is auto-approved)
+
+### POST /api/auth/login
+Login with email and password.
+
+**Request Body:**
+```json
+{
+  "email": "user@example.com",
+  "password": "password123"
+}
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "message": "Login successful",
+  "data": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "name": "John Doe",
+    "phone": "+63 912 345 6789",
+    "address": {...},
+    "role": "customer",
+    "approval_status": "approved",
+    "client_level": null,
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  }
+}
+```
+
+**Error Responses:**
+- `401` - Invalid email or password
+- `403` - Account pending approval
+
+## User Endpoints
+
+### GET /api/users
+Get all users with optional filters.
+
+**Query Parameters:**
+- `role` (optional) - Filter by role ('admin', 'customer')
+- `approval_status` (optional) - Filter by approval status ('pending', 'approved', 'rejected')
+
+**Example Requests:**
+```
+GET /api/users
+GET /api/users?role=customer
+GET /api/users?approval_status=pending
+GET /api/users?role=customer&approval_status=approved
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "uuid",
+      "email": "user@example.com",
+      "name": "John Doe",
+      "role": "customer",
+      "approval_status": "approved",
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+**Note:** Password hashes are never returned in responses.
+
+### GET /api/users/:id
+Get a specific user by ID.
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "name": "John Doe",
+    "phone": "+63 912 345 6789",
+    "address": {...},
+    "role": "customer",
+    "approval_status": "approved",
+    "client_level": null,
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z"
+  }
+}
+```
+
+### PUT /api/users/:id
+Update user information.
+
+**Request Body (all fields optional):**
+```json
+{
+  "name": "Updated Name",
+  "phone": "+63 999 999 9999",
+  "address": {...},
+  "role": "customer",
+  "approval_status": "approved",
+  "client_level": "vip"
+}
+```
+
+**Example Response:**
+```json
+{
+  "success": true,
+  "message": "User updated successfully",
+  "data": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "name": "Updated Name",
+    "role": "customer",
+    "approval_status": "approved",
+    "updated_at": "2024-01-01T01:00:00Z"
+  }
+}
+```
+
 ## Cart Endpoints
 
 ### GET /api/cart

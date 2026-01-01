@@ -1,6 +1,7 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
+const bcrypt = require('bcrypt');
 const { neon } = require('@neondatabase/serverless');
 
 // Load environment variables
@@ -62,18 +63,92 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Example route with database query
+// Get all users (excluding passwords)
 app.get('/api/users', async (req, res) => {
   try {
-    // Example: Get all users from a users table (create this table if needed)
-    const users = await sql`SELECT * FROM users LIMIT 10`;
+    const { role, approval_status } = req.query;
+    
+    let users;
+    if (role && approval_status) {
+      users = await sql`
+        SELECT 
+          id, 
+          email, 
+          name, 
+          phone, 
+          address, 
+          role, 
+          approval_status,
+          client_level,
+          created_at,
+          updated_at
+        FROM users 
+        WHERE role = ${role} AND approval_status = ${approval_status}
+        ORDER BY created_at DESC
+        LIMIT 100
+      `;
+    } else if (role) {
+      users = await sql`
+        SELECT 
+          id, 
+          email, 
+          name, 
+          phone, 
+          address, 
+          role, 
+          approval_status,
+          client_level,
+          created_at,
+          updated_at
+        FROM users 
+        WHERE role = ${role}
+        ORDER BY created_at DESC
+        LIMIT 100
+      `;
+    } else if (approval_status) {
+      users = await sql`
+        SELECT 
+          id, 
+          email, 
+          name, 
+          phone, 
+          address, 
+          role, 
+          approval_status,
+          client_level,
+          created_at,
+          updated_at
+        FROM users 
+        WHERE approval_status = ${approval_status}
+        ORDER BY created_at DESC
+        LIMIT 100
+      `;
+    } else {
+      users = await sql`
+        SELECT 
+          id, 
+          email, 
+          name, 
+          phone, 
+          address, 
+          role, 
+          approval_status,
+          client_level,
+          created_at,
+          updated_at
+        FROM users 
+        ORDER BY created_at DESC
+        LIMIT 100
+      `;
+    }
+    
     res.json({
       success: true,
       data: users,
       count: users.length
     });
   } catch (error) {
-    // If table doesn't exist, return empty array
+    console.error('Error fetching users:', error);
     if (error.message.includes('does not exist')) {
       res.json({
         success: true,
@@ -116,6 +191,150 @@ app.get('/api/bank-type', async (req, res) => {
       success: false,
       error: error.message,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// ============================================
+// AUTHENTICATION ENDPOINTS
+// ============================================
+
+// Register a new user
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, password, name, phone, address, role = 'customer' } = req.body;
+    
+    // Validation
+    if (!email || !password || !name) {
+      return res.status(400).json({
+        success: false,
+        error: 'email, password, and name are required'
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password must be at least 6 characters long'
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await sql`
+      SELECT id, email FROM users WHERE email = ${email}
+    `;
+
+    if (existingUser.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: 'User with this email already exists'
+      });
+    }
+
+    // Hash password
+    const saltRounds = 10;
+    const passwordHash = await bcrypt.hash(password, saltRounds);
+
+    // Insert new user
+    const result = await sql`
+      INSERT INTO users (email, password_hash, name, phone, address, role, approval_status)
+      VALUES (
+        ${email}, 
+        ${passwordHash}, 
+        ${name}, 
+        ${phone || null}, 
+        ${address ? JSON.stringify(address) : null},
+        ${role},
+        ${role === 'admin' ? 'approved' : 'pending'}
+      )
+      RETURNING id, email, name, phone, address, role, approval_status, created_at, updated_at
+    `;
+
+    res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      data: result[0]
+    });
+  } catch (error) {
+    console.error('Error registering user:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validation
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'email and password are required'
+      });
+    }
+
+    // Find user by email
+    const users = await sql`
+      SELECT 
+        id, 
+        email, 
+        password_hash, 
+        name, 
+        phone, 
+        address, 
+        role, 
+        approval_status,
+        client_level,
+        created_at,
+        updated_at
+      FROM users 
+      WHERE email = ${email}
+    `;
+
+    if (users.length === 0) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid email or password'
+      });
+    }
+
+    const user = users[0];
+
+    // Check if user is approved (except for admin)
+    if (user.role !== 'admin' && user.approval_status !== 'approved') {
+      return res.status(403).json({
+        success: false,
+        error: 'Account is pending approval'
+      });
+    }
+
+    // Verify password
+    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+
+    if (!isValidPassword) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid email or password'
+      });
+    }
+
+    // Remove password_hash from response
+    const { password_hash, ...userWithoutPassword } = user;
+
+    res.json({
+      success: true,
+      message: 'Login successful',
+      data: userWithoutPassword
+    });
+  } catch (error) {
+    console.error('Error during login:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
@@ -623,8 +842,11 @@ app.get('/', (req, res) => {
     message: 'Express.js server with Neon Postgres is running!',
     endpoints: {
       health: '/health',
-      getUsers: 'GET /api/users',
-      createUser: 'POST /api/users',
+      register: 'POST /api/auth/register',
+      login: 'POST /api/auth/login',
+      getUsers: 'GET /api/users?role=string&approval_status=string',
+      getUserById: 'GET /api/users/:id',
+      updateUser: 'PUT /api/users/:id',
       getBankType: 'GET /api/bank-type',
       getBoxType: 'GET /api/box-type',
       getCart: 'GET /api/cart?user_id=UUID',
