@@ -1,7 +1,6 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
-const bcrypt = require('bcrypt');
 const { neon } = require('@neondatabase/serverless');
 
 // Load environment variables
@@ -212,13 +211,6 @@ app.post('/api/auth/register', async (req, res) => {
       });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({
-        success: false,
-        error: 'Password must be at least 6 characters long'
-      });
-    }
-
     // Check if user already exists
     const existingUser = await sql`
       SELECT id, email FROM users WHERE email = ${email}
@@ -231,16 +223,13 @@ app.post('/api/auth/register', async (req, res) => {
       });
     }
 
-    // Hash password
-    const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
-
+    // Store password as plain text (simple authentication - NOT for production)
     // Insert new user
     const result = await sql`
       INSERT INTO users (email, password_hash, name, phone, address, role, approval_status)
       VALUES (
         ${email}, 
-        ${passwordHash}, 
+        ${password}, 
         ${name}, 
         ${phone || null}, 
         ${address ? JSON.stringify(address) : null},
@@ -305,10 +294,16 @@ app.post('/api/auth/login', async (req, res) => {
 
     const userData = users[0];
 
-    // 2. Verify password using bcrypt
-    const isValidPassword = await bcrypt.compare(password, userData.password_hash);
+    // 2. Verify password using simple string comparison (simple authentication - NOT for production)
+    // Debug logging (remove in production)
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Login attempt - Email:', email);
+      console.log('Stored password_hash:', userData.password_hash ? 'exists' : 'null/empty');
+      console.log('Provided password:', password);
+      console.log('Passwords match:', userData.password_hash === password);
+    }
 
-    if (!isValidPassword) {
+    if (userData.password_hash !== password) {
       return res.status(401).json({
         success: false,
         error: 'Invalid email or password'
