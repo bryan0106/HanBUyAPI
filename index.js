@@ -266,18 +266,18 @@ app.post('/api/auth/register', async (req, res) => {
 
 // Login
 app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  // Validate input
+  if (!email || !password) {
+    return res.status(400).json({
+      success: false,
+      error: 'Email and password are required'
+    });
+  }
+
   try {
-    const { email, password } = req.body;
-
-    // Validation
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        error: 'email and password are required'
-      });
-    }
-
-    // Find user by email
+    // 1. Find user by email
     const users = await sql`
       SELECT 
         id, 
@@ -295,25 +295,18 @@ app.post('/api/auth/login', async (req, res) => {
       WHERE email = ${email}
     `;
 
-    if (users.length === 0) {
+    // Check if user exists (use same error message for security)
+    if (!users || users.length === 0 || !users[0].password_hash) {
       return res.status(401).json({
         success: false,
         error: 'Invalid email or password'
       });
     }
 
-    const user = users[0];
+    const userData = users[0];
 
-    // Check if user is approved (except for admin)
-    if (user.role !== 'admin' && user.approval_status !== 'approved') {
-      return res.status(403).json({
-        success: false,
-        error: 'Account is pending approval'
-      });
-    }
-
-    // Verify password
-    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+    // 2. Verify password using bcrypt
+    const isValidPassword = await bcrypt.compare(password, userData.password_hash);
 
     if (!isValidPassword) {
       return res.status(401).json({
@@ -322,19 +315,30 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
-    // Remove password_hash from response
-    const { password_hash, ...userWithoutPassword } = user;
+    // 3. Check approval status (admin can bypass)
+    if (userData.role !== 'admin' && userData.approval_status !== 'approved') {
+      return res.status(403).json({
+        success: false,
+        error: 'Account not approved',
+        message: 'Your account is pending approval. Please wait for admin approval.'
+      });
+    }
 
+    // 4. Remove password_hash and return user data
+    const { password_hash, ...safeUserData } = userData;
+
+    // 5. Return success response
     res.json({
       success: true,
-      message: 'Login successful',
-      data: userWithoutPassword
+      user: safeUserData
     });
+
   } catch (error) {
-    console.error('Error during login:', error);
+    console.error('Login error:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: 'Internal server error',
+      message: 'An error occurred during login. Please try again later.'
     });
   }
 });

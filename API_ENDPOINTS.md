@@ -62,8 +62,7 @@ Login with email and password.
 ```json
 {
   "success": true,
-  "message": "Login successful",
-  "data": {
+  "user": {
     "id": "uuid",
     "email": "user@example.com",
     "name": "John Doe",
@@ -79,8 +78,10 @@ Login with email and password.
 ```
 
 **Error Responses:**
-- `401` - Invalid email or password
-- `403` - Account pending approval
+- `400` - Email and password are required
+- `401` - Invalid email or password (generic message for security)
+- `403` - Account not approved (with message about pending approval)
+- `500` - Internal server error (with user-friendly message)
 
 ## User Endpoints
 
