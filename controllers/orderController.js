@@ -320,9 +320,50 @@ const getOrderById = async (req, res) => {
   }
 };
 
+const updateOrderStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status) {
+      return res.status(400).json({
+        success: false,
+        error: 'status is required'
+      });
+    }
+
+    const result = await sql`
+      UPDATE orders 
+      SET status = ${status}, updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING *
+    `;
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Order not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Order status updated',
+      data: result[0]
+    });
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createOrder,
   getOrders,
-  getOrderById
+  getOrderById,
+  updateOrderStatus
 };
 

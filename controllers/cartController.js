@@ -95,8 +95,85 @@ const addToCart = async (req, res) => {
   }
 };
 
+const deleteCartItem = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await sql`
+      DELETE FROM cart_items 
+      WHERE id = ${id}
+      RETURNING *
+    `;
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cart item not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Item removed from cart'
+    });
+  } catch (error) {
+    console.error('Error deleting cart item:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+const updateCartItem = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { quantity, box_type_preference } = req.body;
+
+    if (!quantity || quantity <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'quantity must be greater than 0'
+      });
+    }
+
+    const updates = { quantity, updated_at: new Date() };
+    if (box_type_preference !== undefined) {
+      updates.box_type_preference = box_type_preference;
+    }
+
+    const result = await sql`
+      UPDATE cart_items 
+      SET ${sql(updates)}
+      WHERE id = ${id}
+      RETURNING *
+    `;
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cart item not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Cart item updated',
+      data: result[0]
+    });
+  } catch (error) {
+    console.error('Error updating cart item:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getCart,
-  addToCart
+  addToCart,
+  deleteCartItem,
+  updateCartItem
 };
 

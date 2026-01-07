@@ -197,9 +197,105 @@ const getBoxType = async (req, res) => {
   }
 };
 
+const getUserById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const users = await sql`
+      SELECT 
+        id, 
+        email, 
+        name, 
+        phone, 
+        address, 
+        role, 
+        approval_status,
+        client_level,
+        created_at,
+        updated_at
+      FROM users 
+      WHERE id = ${id}
+    `;
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: users[0]
+    });
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+const updateUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, phone, address } = req.body;
+
+    // Use template literal with sql helper
+    const updateParts = [];
+    
+    if (name) {
+      updateParts.push(sql`name = ${name}`);
+    }
+    if (phone !== undefined) {
+      updateParts.push(sql`phone = ${phone}`);
+    }
+    if (address) {
+      updateParts.push(sql`address = ${JSON.stringify(address)}`);
+    }
+    updateParts.push(sql`updated_at = NOW()`);
+
+    if (updateParts.length === 1) { // Only updated_at
+      return res.status(400).json({
+        success: false,
+        error: 'No fields to update'
+      });
+    }
+
+    const result = await sql`
+      UPDATE users 
+      SET ${sql.join(updateParts, sql`, `)}
+      WHERE id = ${id}
+      RETURNING id, email, name, phone, address, role, approval_status, client_level, created_at, updated_at
+    `;
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'User updated successfully',
+      data: result[0]
+    });
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getUsers,
   createUser,
+  getUserById,
+  updateUser,
   getBankType,
   getBoxType
 };

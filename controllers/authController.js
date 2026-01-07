@@ -1,4 +1,5 @@
 const sql = require('../utils/database');
+const jwt = require('jsonwebtoken');
 
 const register = async (req, res) => {
   try {
@@ -122,10 +123,24 @@ const login = async (req, res) => {
     // 4. Remove password_hash and return user data
     const { password_hash, ...safeUserData } = userData;
 
-    // 5. Return success response
+    // 5. Generate JWT token
+    const token = jwt.sign(
+      { 
+        id: safeUserData.id, 
+        email: safeUserData.email, 
+        role: safeUserData.role 
+      },
+      process.env.JWT_SECRET || 'your-secret-key-change-in-production',
+      { expiresIn: '24h' }
+    );
+
+    // 6. Return success response with token
     res.json({
       success: true,
-      user: safeUserData
+      data: {
+        user: safeUserData,
+        token: token
+      }
     });
 
   } catch (error) {
@@ -138,8 +153,60 @@ const login = async (req, res) => {
   }
 };
 
+const logout = async (req, res) => {
+  // Since we're using JWT, logout is handled client-side by removing the token
+  // But we can log the logout action if needed
+  res.json({
+    success: true,
+    message: 'Logged out successfully'
+  });
+};
+
+const getMe = async (req, res) => {
+  try {
+    // User info is already in req.user from auth middleware
+    const userId = req.user.id;
+
+    const users = await sql`
+      SELECT 
+        id, 
+        email, 
+        name, 
+        phone, 
+        address, 
+        role, 
+        approval_status,
+        client_level,
+        created_at,
+        updated_at
+      FROM users 
+      WHERE id = ${userId}
+    `;
+
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: users[0]
+    });
+  } catch (error) {
+    console.error('Error getting user:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+};
+
 module.exports = {
   register,
-  login
+  login,
+  logout,
+  getMe
 };
 

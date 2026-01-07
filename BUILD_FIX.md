@@ -92,3 +92,4 @@ Once you clear the Root Directory and redeploy, the build should:
 
 **That's it!** The fix is simply clearing the Root Directory field in Render's dashboard. 🚀
 
+

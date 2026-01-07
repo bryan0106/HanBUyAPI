@@ -229,3 +229,4 @@ app.use(cors({
 
 This means your Next.js frontend can make requests directly without any additional CORS configuration! 🎉
 
+
