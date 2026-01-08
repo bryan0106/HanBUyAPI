@@ -357,9 +357,22 @@ const getProducts = async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching products:', error);
+    console.error('Error stack:', error.stack);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint
+    });
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message || 'Failed to fetch products',
+      details: process.env.NODE_ENV === 'development' ? {
+        code: error.code,
+        detail: error.detail,
+        hint: error.hint,
+        stack: error.stack
+      } : undefined
     });
   }
 };
@@ -458,9 +471,22 @@ const getProductById = async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching product:', error);
+    console.error('Error stack:', error.stack);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint
+    });
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message || 'Failed to fetch product',
+      details: process.env.NODE_ENV === 'development' ? {
+        code: error.code,
+        detail: error.detail,
+        hint: error.hint,
+        stack: error.stack
+      } : undefined
     });
   }
 };
@@ -518,9 +544,15 @@ const getKRComparison = async (req, res) => {
     });
   } catch (error) {
     console.error('Error getting KR comparison:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message || 'Failed to get KR comparison',
+      details: process.env.NODE_ENV === 'development' ? {
+        code: error.code,
+        detail: error.detail,
+        hint: error.hint
+      } : undefined
     });
   }
 };
