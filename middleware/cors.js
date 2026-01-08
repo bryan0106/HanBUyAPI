@@ -4,10 +4,18 @@ const cors = require('cors');
 const getAllowedOrigins = () => {
   const origins = [];
   
-  // Always allow localhost for development
-  if (process.env.NODE_ENV !== 'production') {
-    origins.push('http://localhost:3000');
-  }
+  // Always allow localhost for local development, staging, and building
+  // This works in all environments (development, staging, production)
+  // Common ports used by frontend frameworks
+  const localhostPorts = [3000, 3001, 5173, 8080, 4200, 5174, 5175];
+  localhostPorts.forEach(port => {
+    origins.push(`http://localhost:${port}`);
+    origins.push(`http://127.0.0.1:${port}`);
+  });
+  
+  // Also allow any localhost port pattern for maximum flexibility
+  origins.push(/^http:\/\/localhost:\d+$/);
+  origins.push(/^http:\/\/127\.0\.0\.1:\d+$/);
   
   // Add origins from environment variable (comma-separated)
   if (process.env.ALLOWED_ORIGINS) {

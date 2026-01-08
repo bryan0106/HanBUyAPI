@@ -3,7 +3,7 @@ services:
     name: dbexpress
     env: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci --production=false
     startCommand: npm start
     envVars:
       - key: NODE_ENV
@@ -16,4 +16,6 @@ services:
         sync: false  # Comma-separated list of allowed origins (e.g., https://han-b-uy.vercel.app,https://example.com)
       - key: ALLOW_VERCEL_PREVIEWS
         value: "true"  # Set to "false" to disable Vercel preview deployments pattern
+      - key: PORT
+        value: "10000"  # Render sets this automatically, but specifying helps
 
