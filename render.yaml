@@ -10,6 +10,8 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false  # Set this manually in Render dashboard
+      - key: JWT_SECRET
+        sync: false  # Set this manually in Render dashboard (use a strong random string)
       - key: FRONTEND_URL
         sync: false  # Set this manually in Render dashboard (e.g., https://your-frontend.onrender.com)
       - key: ALLOWED_ORIGINS
