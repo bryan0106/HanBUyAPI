@@ -167,84 +167,69 @@ const getProducts = async (req, res) => {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
     const offset = (pageNum - 1) * limitNum;
 
-    // Build WHERE conditions
-    const conditions = [sql`1=1`];
-
-    // Product type filter
+    // Build WHERE clause fragments using template literals
+    // Since Neon serverless doesn't support sql.join(), we combine fragments using nested template literals
+    const whereFragments = [];
+    
     if (product_type && product_type !== 'all') {
-      conditions.push(sql`p.product_type = ${product_type}`);
+      whereFragments.push(sql`p.product_type = ${product_type}`);
     }
-
-    // Status filter
     if (status) {
-      conditions.push(sql`p.status = ${status}`);
+      whereFragments.push(sql`p.status = ${status}`);
     } else if (!include_out_of_stock) {
-      conditions.push(sql`p.status != 'out_of_stock'`);
+      whereFragments.push(sql`p.status != 'out_of_stock'`);
     }
-
-    // Category filter
     if (category) {
-      conditions.push(sql`LOWER(p.category) = LOWER(${category})`);
+      whereFragments.push(sql`LOWER(p.category) = LOWER(${category})`);
     }
-
-    // Brand filter
     if (brand) {
-      conditions.push(sql`LOWER(p.brand) = LOWER(${brand})`);
+      whereFragments.push(sql`LOWER(p.brand) = LOWER(${brand})`);
     }
-
-    // Search filter
     if (search) {
       const searchPattern = `%${search}%`;
-      conditions.push(sql`(
-        p.name ILIKE ${searchPattern} OR 
-        p.description ILIKE ${searchPattern} OR
-        p.sku ILIKE ${searchPattern}
-      )`);
+      whereFragments.push(sql`(p.name ILIKE ${searchPattern} OR p.description ILIKE ${searchPattern} OR p.sku ILIKE ${searchPattern})`);
     }
-
-    // Price range filter
     if (min_price) {
-      conditions.push(sql`p.price >= ${parseFloat(min_price)}`);
+      whereFragments.push(sql`p.price >= ${parseFloat(min_price)}`);
     }
     if (max_price) {
-      conditions.push(sql`p.price <= ${parseFloat(max_price)}`);
+      whereFragments.push(sql`p.price <= ${parseFloat(max_price)}`);
     }
-
-    // Store filter
     if (store_id) {
-      conditions.push(sql`EXISTS (
-        SELECT 1 FROM product_stores ps 
-        WHERE ps.product_id = p.id 
-        AND ps.store_id = ${store_id}
-        AND ps.is_available = true
-      )`);
+      whereFragments.push(sql`EXISTS (SELECT 1 FROM product_stores ps WHERE ps.product_id = p.id AND ps.store_id = ${store_id} AND ps.is_available = true)`);
     }
 
-    // Build ORDER BY clause
-    let orderBy;
+    // Combine WHERE fragments using nested template literals
+    let combinedWhere = whereFragments.length === 0 ? sql`1=1` : whereFragments[0];
+    for (let i = 1; i < whereFragments.length; i++) {
+      combinedWhere = sql`${combinedWhere} AND ${whereFragments[i]}`;
+    }
+
+    // Build ORDER BY as template literal
+    let orderBySql;
     switch (sort) {
       case 'price_asc':
-        orderBy = sql`p.price ASC`;
+        orderBySql = sql`p.price ASC`;
         break;
       case 'price_desc':
-        orderBy = sql`p.price DESC`;
+        orderBySql = sql`p.price DESC`;
         break;
       case 'name_asc':
-        orderBy = sql`p.name ASC`;
+        orderBySql = sql`p.name ASC`;
         break;
       case 'name_desc':
-        orderBy = sql`p.name DESC`;
+        orderBySql = sql`p.name DESC`;
         break;
       case 'stock_desc':
-        orderBy = sql`p.stock DESC`;
+        orderBySql = sql`p.stock DESC`;
         break;
       case 'created_desc':
       default:
-        orderBy = sql`p.created_at DESC`;
+        orderBySql = sql`p.created_at DESC`;
         break;
     }
 
-    // Get products
+    // Execute queries with template literals
     const products = await sql`
       SELECT 
         p.*,
@@ -253,17 +238,16 @@ const getProducts = async (req, res) => {
         COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
         COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
       FROM products p
-      WHERE ${sql.join(conditions, sql` AND `)}
-      ORDER BY ${orderBy}
+      WHERE ${combinedWhere}
+      ORDER BY ${orderBySql}
       LIMIT ${limitNum}
       OFFSET ${offset}
     `;
 
-    // Get total count for pagination
     const countResult = await sql`
       SELECT COUNT(*) as total
       FROM products p
-      WHERE ${sql.join(conditions, sql` AND `)}
+      WHERE ${combinedWhere}
     `;
     const total = parseInt(countResult[0].total);
     const totalPages = Math.ceil(total / limitNum);
@@ -279,7 +263,7 @@ const getProducts = async (req, res) => {
         category as name,
         COUNT(*) as count
       FROM products p
-      WHERE ${sql.join(conditions, sql` AND `)}
+      WHERE ${whereClause}
         AND category IS NOT NULL
       GROUP BY category
       ORDER BY count DESC
@@ -291,7 +275,7 @@ const getProducts = async (req, res) => {
         brand as name,
         COUNT(*) as count
       FROM products p
-      WHERE ${sql.join(conditions, sql` AND `)}
+      WHERE ${whereClause}
         AND brand IS NOT NULL
       GROUP BY brand
       ORDER BY count DESC
@@ -303,7 +287,7 @@ const getProducts = async (req, res) => {
         MIN(price) as min_price,
         MAX(price) as max_price
       FROM products p
-      WHERE ${sql.join(conditions, sql` AND `)}
+      WHERE ${whereClause}
     `;
 
     const priceRange = priceRangeResult[0] || { min_price: 0, max_price: 0 };
@@ -534,3 +518,4 @@ module.exports = {
 };
 
 
+UP
