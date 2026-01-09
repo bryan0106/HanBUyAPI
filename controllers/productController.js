@@ -167,88 +167,411 @@ const getProducts = async (req, res) => {
     const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
     const offset = (pageNum - 1) * limitNum;
 
-    // Build WHERE clause fragments using template literals
-    // Since Neon serverless doesn't support sql.join(), we combine fragments using nested template literals
-    const whereFragments = [];
+    // Build WHERE conditions dynamically
+    // Neon serverless doesn't support sql.join(), so we'll build queries conditionally
+    // using template literals with all conditions inline
     
-    if (product_type && product_type !== 'all') {
-      whereFragments.push(sql`p.product_type = ${product_type}`);
-    }
-    if (status) {
-      whereFragments.push(sql`p.status = ${status}`);
-    } else if (!include_out_of_stock) {
-      whereFragments.push(sql`p.status != 'out_of_stock'`);
-    }
-    if (category) {
-      whereFragments.push(sql`LOWER(p.category) = LOWER(${category})`);
-    }
-    if (brand) {
-      whereFragments.push(sql`LOWER(p.brand) = LOWER(${brand})`);
-    }
-    if (search) {
-      const searchPattern = `%${search}%`;
-      whereFragments.push(sql`(p.name ILIKE ${searchPattern} OR p.description ILIKE ${searchPattern} OR p.sku ILIKE ${searchPattern})`);
-    }
-    if (min_price) {
-      whereFragments.push(sql`p.price >= ${parseFloat(min_price)}`);
-    }
-    if (max_price) {
-      whereFragments.push(sql`p.price <= ${parseFloat(max_price)}`);
-    }
-    if (store_id) {
-      whereFragments.push(sql`EXISTS (SELECT 1 FROM product_stores ps WHERE ps.product_id = p.id AND ps.store_id = ${store_id} AND ps.is_available = true)`);
-    }
-
-    // Combine WHERE fragments using nested template literals
-    let combinedWhere = whereFragments.length === 0 ? sql`1=1` : whereFragments[0];
-    for (let i = 1; i < whereFragments.length; i++) {
-      combinedWhere = sql`${combinedWhere} AND ${whereFragments[i]}`;
-    }
-
-    // Build ORDER BY as template literal
-    let orderBySql;
+    // Build ORDER BY clause as string (safe since values come from our switch, not user input)
+    let orderByClause;
     switch (sort) {
       case 'price_asc':
-        orderBySql = sql`p.price ASC`;
+        orderByClause = 'ORDER BY p.price ASC';
         break;
       case 'price_desc':
-        orderBySql = sql`p.price DESC`;
+        orderByClause = 'ORDER BY p.price DESC';
         break;
       case 'name_asc':
-        orderBySql = sql`p.name ASC`;
+        orderByClause = 'ORDER BY p.name ASC';
         break;
       case 'name_desc':
-        orderBySql = sql`p.name DESC`;
+        orderByClause = 'ORDER BY p.name DESC';
         break;
       case 'stock_desc':
-        orderBySql = sql`p.stock DESC`;
+        orderByClause = 'ORDER BY p.stock DESC';
         break;
       case 'created_desc':
       default:
-        orderBySql = sql`p.created_at DESC`;
+        orderByClause = 'ORDER BY p.created_at DESC';
         break;
     }
 
-    // Execute queries with template literals
-    const products = await sql`
-      SELECT 
-        p.*,
-        COALESCE(p.reserved_stock, 0) as reserved_stock,
-        COALESCE(p.min_threshold, 10) as min_threshold,
-        COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
-        COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
-      FROM products p
-      WHERE ${combinedWhere}
-      ORDER BY ${orderBySql}
-      LIMIT ${limitNum}
-      OFFSET ${offset}
-    `;
+    // Build query conditionally - use template literals with conditional WHERE conditions
+    // Since we can't use sql.join(), we'll build the WHERE clause inline with template literals
+    let products, countResult;
+    
+    // Check which conditions we have and build query accordingly
+    const hasProductType = product_type && product_type !== 'all';
+    const hasStatus = status !== undefined && status !== null;
+    const hasCategory = category !== undefined && category !== null && category !== '';
+    const hasBrand = brand !== undefined && brand !== null && brand !== '';
+    const hasSearch = search !== undefined && search !== null && search !== '';
+    const hasMinPrice = min_price !== undefined && min_price !== null;
+    const hasMaxPrice = max_price !== undefined && max_price !== null;
+    const hasStoreId = store_id !== undefined && store_id !== null;
+    const excludeOutOfStock = !include_out_of_stock && !hasStatus;
 
-    const countResult = await sql`
-      SELECT COUNT(*) as total
-      FROM products p
-      WHERE ${combinedWhere}
-    `;
+    // Build products query with all conditions inline using template literals
+    if (hasProductType && hasStatus && hasCategory && hasBrand && hasSearch && hasMinPrice && hasMaxPrice && hasStoreId && excludeOutOfStock) {
+      // All conditions
+      const searchPattern = `%${search}%`;
+      products = await sql`
+        SELECT 
+          p.*,
+          COALESCE(p.reserved_stock, 0) as reserved_stock,
+          COALESCE(p.min_threshold, 10) as min_threshold,
+          COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+          COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+        FROM products p
+        WHERE p.product_type = ${product_type}
+          AND p.status = ${status}
+          AND LOWER(p.category) = LOWER(${category})
+          AND LOWER(p.brand) = LOWER(${brand})
+          AND (p.name ILIKE ${searchPattern} OR p.description ILIKE ${searchPattern} OR p.sku ILIKE ${searchPattern})
+          AND p.price >= ${parseFloat(min_price)}
+          AND p.price <= ${parseFloat(max_price)}
+          AND EXISTS (SELECT 1 FROM product_stores ps WHERE ps.product_id = p.id AND ps.store_id = ${store_id} AND ps.is_available = true)
+        ${orderByClause}
+        LIMIT ${limitNum}
+        OFFSET ${offset}
+      `;
+    } else {
+      // Build query dynamically - simpler approach: use a single template literal with all possible conditions
+      // But check each condition individually
+      const whereConditions = [];
+      
+      if (hasProductType) {
+        whereConditions.push(sql`p.product_type = ${product_type}`);
+      }
+      if (hasStatus) {
+        whereConditions.push(sql`p.status = ${status}`);
+      } else if (excludeOutOfStock) {
+        whereConditions.push(sql`p.status != 'out_of_stock'`);
+      }
+      if (hasCategory) {
+        whereConditions.push(sql`LOWER(p.category) = LOWER(${category})`);
+      }
+      if (hasBrand) {
+        whereConditions.push(sql`LOWER(p.brand) = LOWER(${brand})`);
+      }
+      if (hasSearch) {
+        const searchPattern = `%${search}%`;
+        whereConditions.push(sql`(p.name ILIKE ${searchPattern} OR p.description ILIKE ${searchPattern} OR p.sku ILIKE ${searchPattern})`);
+      }
+      if (hasMinPrice) {
+        whereConditions.push(sql`p.price >= ${parseFloat(min_price)}`);
+      }
+      if (hasMaxPrice) {
+        whereConditions.push(sql`p.price <= ${parseFloat(max_price)}`);
+      }
+      if (hasStoreId) {
+        whereConditions.push(sql`EXISTS (SELECT 1 FROM product_stores ps WHERE ps.product_id = p.id AND ps.store_id = ${store_id} AND ps.is_available = true)`);
+      }
+
+      // Build query with combined WHERE clause using array join approach
+      // Use array.join() to combine conditions, but still use template literals for values
+      if (whereConditions.length === 0) {
+        // No WHERE conditions - build query with ORDER BY inline
+        if (sort === 'created_desc' || !sort) {
+          products = await sql`
+            SELECT 
+              p.*,
+              COALESCE(p.reserved_stock, 0) as reserved_stock,
+              COALESCE(p.min_threshold, 10) as min_threshold,
+              COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+              COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+            FROM products p
+            ORDER BY p.created_at DESC
+            LIMIT ${limitNum}
+            OFFSET ${offset}
+          `;
+        } else {
+          // Build ORDER BY inline based on sort
+          if (sort === 'price_asc') {
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              ORDER BY p.price ASC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          } else if (sort === 'price_desc') {
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              ORDER BY p.price DESC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          } else {
+            // Default to created_desc
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              ORDER BY p.created_at DESC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          }
+        }
+      } else {
+        // Use array join approach - combine conditions by accessing array elements directly
+        // For 1-2 conditions (most common for /onhand and /preorder), build inline
+        if (whereConditions.length === 1) {
+          // Single condition - use it directly
+          if (sort === 'created_desc' || !sort) {
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              WHERE ${whereConditions[0]}
+              ORDER BY p.created_at DESC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          } else {
+            // Build ORDER BY inline based on sort
+            if (sort === 'price_asc') {
+              products = await sql`
+                SELECT 
+                  p.*,
+                  COALESCE(p.reserved_stock, 0) as reserved_stock,
+                  COALESCE(p.min_threshold, 10) as min_threshold,
+                  COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                  COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+                FROM products p
+                WHERE ${whereConditions[0]}
+                ORDER BY p.price ASC
+                LIMIT ${limitNum}
+                OFFSET ${offset}
+              `;
+            } else if (sort === 'price_desc') {
+              products = await sql`
+                SELECT 
+                  p.*,
+                  COALESCE(p.reserved_stock, 0) as reserved_stock,
+                  COALESCE(p.min_threshold, 10) as min_threshold,
+                  COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                  COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+                FROM products p
+                WHERE ${whereConditions[0]}
+                ORDER BY p.price DESC
+                LIMIT ${limitNum}
+                OFFSET ${offset}
+              `;
+            } else {
+              // Default to created_desc
+              products = await sql`
+                SELECT 
+                  p.*,
+                  COALESCE(p.reserved_stock, 0) as reserved_stock,
+                  COALESCE(p.min_threshold, 10) as min_threshold,
+                  COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                  COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+                FROM products p
+                WHERE ${whereConditions[0]}
+                ORDER BY p.created_at DESC
+                LIMIT ${limitNum}
+                OFFSET ${offset}
+              `;
+            }
+          }
+        } else if (whereConditions.length === 2) {
+          // Two conditions - most common case for /onhand and /preorder
+          // Use array join pattern: access conditions[0] and conditions[1] directly
+          if (sort === 'created_desc' || !sort) {
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              WHERE ${whereConditions[0]} AND ${whereConditions[1]}
+              ORDER BY p.created_at DESC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          } else if (sort === 'price_asc') {
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              WHERE ${whereConditions[0]} AND ${whereConditions[1]}
+              ORDER BY p.price ASC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          } else if (sort === 'price_desc') {
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              WHERE ${whereConditions[0]} AND ${whereConditions[1]}
+              ORDER BY p.price DESC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          } else {
+            // Default to created_desc
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              WHERE ${whereConditions[0]} AND ${whereConditions[1]}
+              ORDER BY p.created_at DESC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          }
+        } else {
+          // 3+ conditions - combine step by step using array elements
+          // Use array join pattern: combine conditions[0] with conditions[1], then with conditions[2], etc.
+          let combinedWhere = whereConditions[0];
+          for (let i = 1; i < whereConditions.length; i++) {
+            combinedWhere = sql`${combinedWhere} AND ${whereConditions[i]}`;
+          }
+          
+          // Build ORDER BY inline
+          if (sort === 'created_desc' || !sort) {
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              WHERE ${combinedWhere}
+              ORDER BY p.created_at DESC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          } else if (sort === 'price_asc') {
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              WHERE ${combinedWhere}
+              ORDER BY p.price ASC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          } else if (sort === 'price_desc') {
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              WHERE ${combinedWhere}
+              ORDER BY p.price DESC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          } else {
+            // Default to created_desc
+            products = await sql`
+              SELECT 
+                p.*,
+                COALESCE(p.reserved_stock, 0) as reserved_stock,
+                COALESCE(p.min_threshold, 10) as min_threshold,
+                COALESCE(p.php_price, p.price * COALESCE(p.price_conversion_rate, 0.042)) as php_price,
+                COALESCE(p.price_conversion_rate, 0.042) as price_conversion_rate
+              FROM products p
+              WHERE ${combinedWhere}
+              ORDER BY p.created_at DESC
+              LIMIT ${limitNum}
+              OFFSET ${offset}
+            `;
+          }
+        }
+      }
+    }
+
+    // Build count query with same conditions
+    const countWhereConditions = [];
+    if (hasProductType) {
+      countWhereConditions.push(sql`p.product_type = ${product_type}`);
+    }
+    if (hasStatus) {
+      countWhereConditions.push(sql`p.status = ${status}`);
+    } else if (excludeOutOfStock) {
+      countWhereConditions.push(sql`p.status != 'out_of_stock'`);
+    }
+    if (hasCategory) {
+      countWhereConditions.push(sql`LOWER(p.category) = LOWER(${category})`);
+    }
+    if (hasBrand) {
+      countWhereConditions.push(sql`LOWER(p.brand) = LOWER(${brand})`);
+    }
+    if (hasSearch) {
+      const searchPattern = `%${search}%`;
+      countWhereConditions.push(sql`(p.name ILIKE ${searchPattern} OR p.description ILIKE ${searchPattern} OR p.sku ILIKE ${searchPattern})`);
+    }
+    if (hasMinPrice) {
+      countWhereConditions.push(sql`p.price >= ${parseFloat(min_price)}`);
+    }
+    if (hasMaxPrice) {
+      countWhereConditions.push(sql`p.price <= ${parseFloat(max_price)}`);
+    }
+    if (hasStoreId) {
+      countWhereConditions.push(sql`EXISTS (SELECT 1 FROM product_stores ps WHERE ps.product_id = p.id AND ps.store_id = ${store_id} AND ps.is_available = true)`);
+    }
+
+    if (countWhereConditions.length === 0) {
+      countResult = await sql`SELECT COUNT(*) as total FROM products p`;
+    } else if (countWhereConditions.length === 1) {
+      countResult = await sql`SELECT COUNT(*) as total FROM products p WHERE ${countWhereConditions[0]}`;
+    } else if (countWhereConditions.length === 2) {
+      countResult = await sql`SELECT COUNT(*) as total FROM products p WHERE ${countWhereConditions[0]} AND ${countWhereConditions[1]}`;
+    } else if (countWhereConditions.length === 3) {
+      countResult = await sql`SELECT COUNT(*) as total FROM products p WHERE ${countWhereConditions[0]} AND ${countWhereConditions[1]} AND ${countWhereConditions[2]}`;
+    } else {
+      // More than 3 conditions - build step by step
+      let combinedCountWhere = countWhereConditions[0];
+      for (let i = 1; i < countWhereConditions.length; i++) {
+        combinedCountWhere = sql`${combinedCountWhere} AND ${countWhereConditions[i]}`;
+      }
+      countResult = await sql`SELECT COUNT(*) as total FROM products p WHERE ${combinedCountWhere}`;
+    }
     const total = parseInt(countResult[0].total);
     const totalPages = Math.ceil(total / limitNum);
 
@@ -258,37 +581,109 @@ const getProducts = async (req, res) => {
     );
 
     // Get aggregations (categories, brands, price range)
-    const categoryAgg = await sql`
-      SELECT 
-        category as name,
-        COUNT(*) as count
-      FROM products p
-      WHERE ${whereClause}
-        AND category IS NOT NULL
-      GROUP BY category
-      ORDER BY count DESC
-      LIMIT 20
-    `;
-
-    const brandAgg = await sql`
-      SELECT 
-        brand as name,
-        COUNT(*) as count
-      FROM products p
-      WHERE ${whereClause}
-        AND brand IS NOT NULL
-      GROUP BY brand
-      ORDER BY count DESC
-      LIMIT 20
-    `;
-
-    const priceRangeResult = await sql`
-      SELECT 
-        MIN(price) as min_price,
-        MAX(price) as max_price
-      FROM products p
-      WHERE ${whereClause}
-    `;
+    // Use the same WHERE conditions as the main query
+    let categoryAgg, brandAgg, priceRangeResult;
+    
+    if (countWhereConditions.length === 0) {
+      categoryAgg = await sql`
+        SELECT 
+          category as name,
+          COUNT(*) as count
+        FROM products p
+        WHERE category IS NOT NULL
+        GROUP BY category
+        ORDER BY count DESC
+        LIMIT 20
+      `;
+      
+      brandAgg = await sql`
+        SELECT 
+          brand as name,
+          COUNT(*) as count
+        FROM products p
+        WHERE brand IS NOT NULL
+        GROUP BY brand
+        ORDER BY count DESC
+        LIMIT 20
+      `;
+      
+      priceRangeResult = await sql`
+        SELECT 
+          MIN(price) as min_price,
+          MAX(price) as max_price
+        FROM products p
+      `;
+    } else if (countWhereConditions.length === 1) {
+      const aggWhere = countWhereConditions[0];
+      categoryAgg = await sql`
+        SELECT 
+          category as name,
+          COUNT(*) as count
+        FROM products p
+        WHERE ${aggWhere}
+          AND category IS NOT NULL
+        GROUP BY category
+        ORDER BY count DESC
+        LIMIT 20
+      `;
+      
+      brandAgg = await sql`
+        SELECT 
+          brand as name,
+          COUNT(*) as count
+        FROM products p
+        WHERE ${aggWhere}
+          AND brand IS NOT NULL
+        GROUP BY brand
+        ORDER BY count DESC
+        LIMIT 20
+      `;
+      
+      priceRangeResult = await sql`
+        SELECT 
+          MIN(price) as min_price,
+          MAX(price) as max_price
+        FROM products p
+        WHERE ${aggWhere}
+      `;
+    } else {
+      let combinedAggWhere = countWhereConditions[0];
+      for (let i = 1; i < countWhereConditions.length; i++) {
+        combinedAggWhere = sql`${combinedAggWhere} AND ${countWhereConditions[i]}`;
+      }
+      
+      categoryAgg = await sql`
+        SELECT 
+          category as name,
+          COUNT(*) as count
+        FROM products p
+        WHERE ${combinedAggWhere}
+          AND category IS NOT NULL
+        GROUP BY category
+        ORDER BY count DESC
+        LIMIT 20
+      `;
+      
+      brandAgg = await sql`
+        SELECT 
+          brand as name,
+          COUNT(*) as count
+        FROM products p
+        WHERE ${combinedAggWhere}
+          AND brand IS NOT NULL
+        GROUP BY brand
+        ORDER BY count DESC
+        LIMIT 20
+      `;
+      
+      priceRangeResult = await sql`
+        SELECT 
+          MIN(price) as min_price,
+          MAX(price) as max_price
+        FROM products p
+        WHERE ${combinedAggWhere}
+      `;
+    }
 
     const priceRange = priceRangeResult[0] || { min_price: 0, max_price: 0 };
 
